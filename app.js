@@ -12,6 +12,8 @@ const REGIONS = [
   { id: "western", name: "Western NY", short: "BUF", lat: 42.8864, lon: -78.8784 }
 ];
 
+const MAPBOX_TOKEN = window.WEATHER_CONFIG?.mapboxToken ?? "";
+const RAINVIEWER_API = "https://api.rainviewer.com/public/weather-maps.json";
 const rainWords = /\b(rain|showers?|thunderstorms?|drizzle|precipitation)\b/i;
 
 const summaryEl = document.querySelector("#summary");
@@ -24,6 +26,7 @@ const mapEl = document.querySelector("#map");
 
 let map;
 let markers = new Map();
+let radarFrameTime;
 
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
@@ -128,36 +131,114 @@ function statusLabel(status) {
   return "Not likely";
 }
 
-function markerIcon(region, forecast) {
-  return L.divIcon({
-    className: "",
-    html: `<div class="marker-pin ${forecast.status}">${escapeHtml(region.short)}</div>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -14]
-  });
-}
-
 function initMap() {
-  if (!window.L) {
+  if (!window.mapboxgl) {
     mapEl.textContent = "Map library could not load. Regional forecast cards are still available below.";
     return;
   }
 
-  map = L.map("map", {
-    scrollWheelZoom: false,
-    zoomControl: true
-  }).setView([42.95, -75.6], 6);
+  if (!MAPBOX_TOKEN || MAPBOX_TOKEN === "YOUR_MAPBOX_PUBLIC_TOKEN") {
+    mapEl.classList.add("map-error");
+    mapEl.innerHTML = `<div class="empty">Mapbox API key needed. Add a config.js file using config.example.js as a template.</div>`;
+    return;
+  }
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 11,
-    attribution: "&copy; OpenStreetMap contributors"
-  }).addTo(map);
+  mapboxgl.accessToken = MAPBOX_TOKEN;
+  map = new mapboxgl.Map({
+    bounds: [
+      [-79.95, 40.45],
+      [-71.75, 45.05]
+    ],
+    container: "map",
+    fitBoundsOptions: { padding: 36 },
+    maxBounds: [
+      [-81.2, 39.8],
+      [-70.6, 45.7]
+    ],
+    pitchWithRotate: false,
+    style: "mapbox://styles/mapbox/light-v11"
+  });
 
-  map.fitBounds([
-    [40.45, -79.9],
-    [45.05, -71.75]
-  ]);
+  map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-left");
+
+  map.on("load", () => {
+    map.resize();
+    loadRadarLayer();
+    addRadarCredit();
+  });
+}
+
+async function loadRadarLayer() {
+  if (!map) return;
+
+  try {
+    const response = await fetch(RAINVIEWER_API);
+    if (!response.ok) throw new Error("Could not load radar overlay.");
+
+    const data = await response.json();
+    const frames = data.radar?.past ?? [];
+    const latest = frames.at(-1);
+
+    if (!data.host || !latest?.path) throw new Error("Radar overlay is unavailable right now.");
+
+    radarFrameTime = latest.time;
+    const tileUrl = `${data.host}${latest.path}/512/{z}/{x}/{y}/2/1_1.png`;
+
+    if (map.getLayer("rain-radar")) {
+      map.removeLayer("rain-radar");
+    }
+
+    if (map.getSource("rain-radar")) {
+      map.removeSource("rain-radar");
+    }
+
+    map.addSource("rain-radar", {
+      type: "raster",
+      tiles: [tileUrl],
+      tileSize: 512,
+      maxzoom: 10
+    });
+
+    map.addLayer({
+      id: "rain-radar",
+      type: "raster",
+      source: "rain-radar",
+      paint: {
+        "raster-opacity": 0.66,
+        "raster-fade-duration": 250
+      }
+    });
+
+    renderRadarStamp();
+  } catch (error) {
+    renderRadarStamp(error.message);
+  }
+}
+
+function renderRadarStamp(errorMessage = "") {
+  const existing = mapEl.querySelector(".radar-stamp");
+  const stamp = existing ?? document.createElement("div");
+  stamp.className = "radar-stamp";
+
+  if (errorMessage) {
+    stamp.textContent = errorMessage;
+  } else if (radarFrameTime) {
+    stamp.textContent = `Radar ${timeFormatter.format(new Date(radarFrameTime * 1000))}`;
+  }
+
+  if (!existing) mapEl.append(stamp);
+}
+
+function addRadarCredit() {
+  if (mapEl.querySelector(".radar-credit")) return;
+
+  const credit = document.createElement("a");
+  credit.className = "radar-credit";
+  credit.href = "https://www.rainviewer.com/";
+  credit.target = "_blank";
+  credit.rel = "noreferrer";
+  credit.textContent = "Radar: RainViewer";
+  mapEl.append(credit);
 }
 
 async function fetchHourlyForecast(region) {
@@ -178,28 +259,37 @@ async function fetchHourlyForecast(region) {
 }
 
 function renderMapMarker(region, forecast) {
-  if (!map || !window.L) return;
+  if (!map || !window.mapboxgl) return;
 
-  const popup = `
+  const label = `${region.name}: ${statusLabel(forecast.status)}. ${forecast.window}. Peak next 12 hours ${forecast.maxChance}%.`;
+  const popupHtml = `
     <strong class="popup-title">${escapeHtml(region.name)}</strong>
     <p class="popup-detail">${escapeHtml(statusLabel(forecast.status))}</p>
     <p class="popup-detail">${escapeHtml(forecast.window)}</p>
     <p class="popup-detail">Peak next 12 hours: ${forecast.maxChance}%</p>
   `;
-
   const existing = markers.get(region.id);
+
   if (existing) {
-    existing.setIcon(markerIcon(region, forecast));
-    existing.setPopupContent(popup);
+    const element = existing.getElement();
+    element.className = `map-pin ${forecast.status}`;
+    element.querySelector("span").textContent = region.short;
+    element.querySelector("small").textContent = `${forecast.maxChance}%`;
+    existing.setPopup(new mapboxgl.Popup({ offset: 28 }).setHTML(popupHtml));
     return;
   }
 
-  const marker = L.marker([region.lat, region.lon], {
-    icon: markerIcon(region, forecast),
-    title: region.name
-  }).addTo(map);
+  const element = document.createElement("button");
+  element.type = "button";
+  element.className = `map-pin ${forecast.status}`;
+  element.setAttribute("aria-label", label);
+  element.innerHTML = `<span>${escapeHtml(region.short)}</span><small>${forecast.maxChance}%</small>`;
 
-  marker.bindPopup(popup);
+  const marker = new mapboxgl.Marker({ element })
+    .setLngLat([region.lon, region.lat])
+    .setPopup(new mapboxgl.Popup({ offset: 28 }).setHTML(popupHtml))
+    .addTo(map);
+
   markers.set(region.id, marker);
 }
 
@@ -280,7 +370,6 @@ async function loadForecast() {
         return { region, error };
       }
     }));
-
     renderRegionCards(results);
 
     const nyc = results.find((result) => result.region.id === "nyc");
