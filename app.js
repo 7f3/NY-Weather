@@ -1,13 +1,13 @@
 const REGIONS = [
   { id: "nyc", name: "New York City", short: "NYC", lat: 40.7128, lon: -74.0060 },
-  { id: "li", name: "Long Island", short: "LI", lat: 40.7891, lon: -73.1350 },
+  { id: "li", name: "Long Island", short: "LI", lat: 40.8559, lon: -72.7809 },
   { id: "hudson", name: "Hudson Valley", short: "HV", lat: 41.7004, lon: -73.9210 },
   { id: "capital", name: "Capital Region", short: "ALB", lat: 42.6526, lon: -73.7562 },
-  { id: "catskills", name: "Catskills", short: "CAT", lat: 42.1930, lon: -74.5199 },
-  { id: "adirondacks", name: "Adirondacks", short: "ADK", lat: 43.9695, lon: -74.1646 },
-  { id: "north", name: "North Country", short: "NC", lat: 44.6995, lon: -73.4529 },
+  { id: "catskills", name: "Catskills", short: "CAT", lat: 42.0164, lon: -74.6910 },
+  { id: "adirondacks", name: "Adirondacks", short: "ADK", lat: 43.9707, lon: -74.1646 },
+  { id: "north", name: "North Country", short: "NC", lat: 44.6995, lon: -73.6550 },
   { id: "central", name: "Central NY", short: "CNY", lat: 43.0481, lon: -76.1474 },
-  { id: "southern", name: "Southern Tier", short: "ST", lat: 42.0987, lon: -75.9180 },
+  { id: "southern", name: "Southern Tier", short: "ST", lat: 42.0987, lon: -76.0471 },
   { id: "finger", name: "Finger Lakes", short: "FLX", lat: 42.8864, lon: -77.2810 },
   { id: "western", name: "Western NY", short: "BUF", lat: 42.8864, lon: -78.8784 }
 ];
@@ -26,7 +26,15 @@ const mapEl = document.querySelector("#map");
 
 let map;
 let markers = new Map();
-let radarFrameTime;
+let radarFrames = [];
+let radarPastFrames = [];
+let radarNowcastFrames = [];
+let radarFrameIndex = 0;
+let radarInterval;
+let radarPlaying = true;
+let radarHost = "";
+let latestResults = [];
+let currentTimeInterval;
 
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
@@ -41,6 +49,13 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
   minute: "2-digit",
   timeZone: "America/New_York"
+});
+
+const currentTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "America/New_York",
+  timeZoneName: "short"
 });
 
 function escapeHtml(value) {
@@ -105,23 +120,27 @@ function groupRainWindows(periods, hours = 36) {
 
 function summarizeRegion(periods) {
   const next12 = periods.slice(0, 12);
+  const selectedPeriod = periods[0];
   const windows = groupRainWindows(periods, 24);
   const maxChance = Math.max(...next12.map((period) => period.probabilityOfPrecipitation?.value ?? 0), 0);
-  const mentionsRain = next12.some((period) => rainWords.test(period.shortForecast));
+  const selectedChance = selectedPeriod?.probabilityOfPrecipitation?.value ?? 0;
+  const mentionsRain = rainWords.test(selectedPeriod?.shortForecast ?? "");
   const firstWindow = windows[0];
 
   let status = "clear";
-  if (maxChance >= 50 || (firstWindow && firstWindow.maxChance >= 40)) {
+  if (selectedChance >= 50 || mentionsRain) {
     status = "likely";
-  } else if (maxChance >= 25 || mentionsRain || firstWindow) {
+  } else if (selectedChance >= 25) {
     status = "possible";
   }
 
   return {
     status,
     maxChance,
+    selectedChance,
+    selectedTime: selectedPeriod?.startTime,
     window: firstWindow ? formatWindow(firstWindow.start, firstWindow.end) : "No likely rain window in the next 24 hours",
-    condition: next12[0]?.shortForecast ?? "Forecast unavailable"
+    condition: selectedPeriod?.shortForecast ?? "Forecast unavailable"
   };
 }
 
@@ -165,6 +184,8 @@ function initMap() {
     map.resize();
     loadRadarLayer();
     addRadarCredit();
+    addRadarControls();
+    startCurrentTimeStamp();
   });
 }
 
@@ -176,57 +197,131 @@ async function loadRadarLayer() {
     if (!response.ok) throw new Error("Could not load radar overlay.");
 
     const data = await response.json();
-    const frames = data.radar?.past ?? [];
-    const latest = frames.at(-1);
+    radarHost = data.host;
+    radarPastFrames = data.radar?.past ?? [];
+    radarNowcastFrames = data.radar?.nowcast ?? [];
+    radarFrames = [...radarPastFrames, ...radarNowcastFrames];
+    radarFrameIndex = Math.max(radarPastFrames.length - 1, 0);
+    const latest = radarFrames[radarFrameIndex];
 
-    if (!data.host || !latest?.path) throw new Error("Radar overlay is unavailable right now.");
+    if (!radarHost || !latest?.path) throw new Error("Radar overlay is unavailable right now.");
 
-    radarFrameTime = latest.time;
-    const tileUrl = `${data.host}${latest.path}/512/{z}/{x}/{y}/2/1_1.png`;
-
-    if (map.getLayer("rain-radar")) {
-      map.removeLayer("rain-radar");
-    }
-
-    if (map.getSource("rain-radar")) {
-      map.removeSource("rain-radar");
-    }
-
-    map.addSource("rain-radar", {
-      type: "raster",
-      tiles: [tileUrl],
-      tileSize: 512,
-      maxzoom: 10
-    });
-
-    map.addLayer({
-      id: "rain-radar",
-      type: "raster",
-      source: "rain-radar",
-      paint: {
-        "raster-opacity": 0.66,
-        "raster-fade-duration": 250
-      }
-    });
-
-    renderRadarStamp();
+    buildRadarLayers();
+    updateRadarForSelectedHour();
   } catch (error) {
-    renderRadarStamp(error.message);
+    renderRadarStamp(null, error.message);
   }
 }
 
-function renderRadarStamp(errorMessage = "") {
+function buildRadarLayers() {
+  if (!map || !radarHost) return;
+
+  radarFrames.forEach((frame, index) => {
+    const sourceId = `rain-radar-${index}`;
+    const layerId = `rain-radar-${index}`;
+    const tileUrl = `${radarHost}${frame.path}/512/{z}/{x}/{y}/2/1_1.png`;
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, {
+        type: "raster",
+        tiles: [tileUrl],
+        tileSize: 512,
+        maxzoom: 10
+      });
+    }
+
+    if (!map.getLayer(layerId)) {
+      map.addLayer({
+        id: layerId,
+        type: "raster",
+        source: sourceId,
+        paint: {
+          "raster-opacity": 0,
+          "raster-fade-duration": 450
+        }
+      });
+    }
+  });
+}
+
+function showRadarFrame(index) {
+  if (!map || !radarFrames[index]) return;
+
+  radarFrames.forEach((frame, frameIndex) => {
+    const layerId = `rain-radar-${frameIndex}`;
+    if (map.getLayer(layerId)) {
+      map.setPaintProperty(layerId, "raster-opacity", frameIndex === index ? 0.66 : 0);
+    }
+  });
+
+  renderRadarStamp();
+}
+
+function updateRadarForSelectedHour() {
+  if (!radarFrames.length) return;
+
+  clearInterval(radarInterval);
+  radarFrameIndex = Math.max(radarPastFrames.length - 1, 0);
+  showRadarFrame(radarFrameIndex);
+  startRadarAnimation();
+}
+
+function startRadarAnimation() {
+  clearInterval(radarInterval);
+  if (radarPastFrames.length < 2 || !radarPlaying) return;
+
+  radarInterval = setInterval(() => {
+    const pastStart = 0;
+    const pastEnd = Math.max(radarPastFrames.length - 1, 0);
+    radarFrameIndex = radarFrameIndex >= pastEnd ? pastStart : radarFrameIndex + 1;
+    showRadarFrame(radarFrameIndex);
+  }, 1000);
+}
+
+function renderRadarStamp(frameTime = null, errorMessage = "") {
   const existing = mapEl.querySelector(".radar-stamp");
   const stamp = existing ?? document.createElement("div");
   stamp.className = "radar-stamp";
 
   if (errorMessage) {
     stamp.textContent = errorMessage;
-  } else if (radarFrameTime) {
-    stamp.textContent = `Radar ${timeFormatter.format(new Date(radarFrameTime * 1000))}`;
+  } else {
+    stamp.textContent = `Current time: ${currentTimeFormatter.format(new Date())}`;
   }
 
   if (!existing) mapEl.append(stamp);
+}
+
+function startCurrentTimeStamp() {
+  renderRadarStamp();
+  clearInterval(currentTimeInterval);
+  currentTimeInterval = setInterval(() => renderRadarStamp(), 1000);
+}
+
+function addRadarControls() {
+  if (mapEl.querySelector(".radar-toggle")) return;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "radar-toggle";
+  toggle.textContent = "Pause radar";
+  toggle.addEventListener("click", () => {
+    radarPlaying = !radarPlaying;
+    toggle.textContent = radarPlaying ? "Pause radar" : "Play radar";
+
+    if (!radarPlaying) {
+      clearInterval(radarInterval);
+      return;
+    }
+
+    if (radarFrames.length) {
+      updateRadarForSelectedHour();
+    } else {
+      loadRadarLayer();
+    }
+  });
+
+  mapEl.append(toggle);
 }
 
 function addRadarCredit() {
@@ -261,12 +356,13 @@ async function fetchHourlyForecast(region) {
 function renderMapMarker(region, forecast) {
   if (!map || !window.mapboxgl) return;
 
-  const label = `${region.name}: ${statusLabel(forecast.status)}. ${forecast.window}. Peak next 12 hours ${forecast.maxChance}%.`;
+  const time = forecast.selectedTime ? formatTime(forecast.selectedTime) : "selected hour";
+  const label = `${region.name}: ${statusLabel(forecast.status)} at ${time}. ${forecast.selectedChance}% chance.`;
   const popupHtml = `
     <strong class="popup-title">${escapeHtml(region.name)}</strong>
-    <p class="popup-detail">${escapeHtml(statusLabel(forecast.status))}</p>
-    <p class="popup-detail">${escapeHtml(forecast.window)}</p>
-    <p class="popup-detail">Peak next 12 hours: ${forecast.maxChance}%</p>
+    <p class="popup-detail">${escapeHtml(statusLabel(forecast.status))} at ${escapeHtml(time)}</p>
+    <p class="popup-detail">${forecast.selectedChance}% chance</p>
+    <p class="popup-detail">${escapeHtml(forecast.condition)}</p>
   `;
   const existing = markers.get(region.id);
 
@@ -274,7 +370,7 @@ function renderMapMarker(region, forecast) {
     const element = existing.getElement();
     element.className = `map-pin ${forecast.status}`;
     element.querySelector("span").textContent = region.short;
-    element.querySelector("small").textContent = `${forecast.maxChance}%`;
+    element.querySelector("small").textContent = `${forecast.selectedChance}%`;
     existing.setPopup(new mapboxgl.Popup({ offset: 28 }).setHTML(popupHtml));
     return;
   }
@@ -283,7 +379,7 @@ function renderMapMarker(region, forecast) {
   element.type = "button";
   element.className = `map-pin ${forecast.status}`;
   element.setAttribute("aria-label", label);
-  element.innerHTML = `<span>${escapeHtml(region.short)}</span><small>${forecast.maxChance}%</small>`;
+  element.innerHTML = `<span>${escapeHtml(region.short)}</span><small>${forecast.selectedChance}%</small>`;
 
   const marker = new mapboxgl.Marker({ element })
     .setLngLat([region.lon, region.lat])
@@ -309,8 +405,8 @@ function renderRegionCards(results) {
       <article class="region ${forecast.status}">
         <strong>${escapeHtml(region.name)}</strong>
         <span class="badge">${escapeHtml(statusLabel(forecast.status))}</span>
-        <span>${escapeHtml(forecast.window)}</span>
-        <span>Peak next 12 hours: ${forecast.maxChance}%</span>
+        <span>${escapeHtml(forecast.selectedTime ? formatTime(forecast.selectedTime) : "Selected hour")}: ${forecast.selectedChance}% chance</span>
+        <span>${escapeHtml(forecast.condition)}</span>
       </article>
     `;
   }).join("");
@@ -370,6 +466,7 @@ async function loadForecast() {
         return { region, error };
       }
     }));
+    latestResults = results;
     renderRegionCards(results);
 
     const nyc = results.find((result) => result.region.id === "nyc");
