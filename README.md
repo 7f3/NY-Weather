@@ -33,7 +33,6 @@ A Mapbox public access token is required for the map.
 3. Open the Access Tokens page: https://account.mapbox.com/access-tokens/.
 4. Use the default public token or create a new public token.
 5. The token should start with `pk.`.
-6. Restrict the token to your website URL when publishing, such as `https://7f3.github.io`.
 
 ### How To Use It
 
