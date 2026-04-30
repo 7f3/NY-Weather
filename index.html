@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Weather</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQZ7fE1LVU5KkT1P6KQ5QdJ5QW2m3fE="
+      crossorigin=""
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app" aria-live="polite">
+      <section class="panel">
+        <div class="masthead">
+          <p class="eyebrow">New York State</p>
+          <h1>Weather</h1>
+          <p class="summary" id="summary">Checking the latest hourly forecasts across New York...</p>
+        </div>
+
+        <div class="status-row">
+          <div>
+            <span class="label">Updated</span>
+            <strong id="updated">--</strong>
+          </div>
+          <button id="refresh" type="button" aria-label="Refresh forecast">
+            <span aria-hidden="true">R</span>
+          </button>
+        </div>
+
+        <section class="map-block" aria-labelledby="map-heading">
+          <div class="section-heading">
+            <h2 id="map-heading">State Forecast Map</h2>
+            <div class="legend" aria-label="Map legend">
+              <span><i class="dot likely"></i>Likely</span>
+              <span><i class="dot possible"></i>Possible</span>
+              <span><i class="dot clear"></i>Not likely</span>
+            </div>
+          </div>
+          <div id="map" class="map" role="img" aria-label="Forecast map of New York State"></div>
+        </section>
+
+        <section class="regions-block" aria-labelledby="regions-heading">
+          <h2 id="regions-heading">Regional Outlook</h2>
+          <div id="regions" class="regions">
+            <div class="loading">Loading regional forecasts...</div>
+          </div>
+        </section>
+
+        <section class="forecast-block" aria-labelledby="today-heading">
+          <h2 id="today-heading">NYC Approximate Rain Times</h2>
+          <div id="rain-windows" class="rain-windows">
+            <div class="loading">Loading forecast windows...</div>
+          </div>
+        </section>
+
+        <section class="hourly-block" aria-labelledby="hourly-heading">
+          <h2 id="hourly-heading">NYC Next 12 Hours</h2>
+          <div id="hourly" class="hourly"></div>
+        </section>
+      </section>
+    </main>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="app.js"></script>
+  </body>
+</html>
