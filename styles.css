@@ -202,6 +202,7 @@ button:disabled {
   box-shadow: 0 8px 22px rgba(23, 32, 29, 0.13);
 }
 
+.radar-toggle,
 .radar-stamp,
 .radar-credit {
   position: absolute;
@@ -214,10 +215,23 @@ button:disabled {
   font-weight: 800;
 }
 
+.radar-toggle {
+  left: 12px;
+  bottom: 72px;
+  width: auto;
+  height: auto;
+  padding: 7px 10px;
+  font-size: 0.76rem;
+}
+
 .radar-stamp {
   left: 12px;
   bottom: 38px;
-  padding: 7px 10px;
+  max-width: max-content;
+  min-width: 0;
+  padding: 8px 12px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .radar-credit {
@@ -248,21 +262,21 @@ button:disabled {
   display: grid;
   place-items: center;
   grid-template-rows: 1fr auto;
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   padding: 0;
   border: 3px solid #ffffff;
   border-radius: 999px;
   box-shadow: 0 8px 18px rgba(23, 32, 29, 0.25);
   color: #ffffff;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 950;
   line-height: 1;
 }
 
 .map-pin small {
   display: block;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-weight: 850;
   opacity: 0.9;
 }
